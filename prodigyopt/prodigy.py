@@ -37,6 +37,8 @@ class Prodigy(torch.optim.Optimizer):
             Use AdamW style decoupled weight decay
         use_bias_correction (boolean):
             Turn on Adam's bias correction. Off by default.
+        use_belief (boolean):
+            Use Belief stlye update to the g^2 term in Adam
         safeguard_warmup (boolean):
             Remove lr from the denominator of D estimate to avoid issues during warm-up stage. Off by default.
         d0 (float):
@@ -57,7 +59,7 @@ class Prodigy(torch.optim.Optimizer):
     def __init__(self, params, lr=1.0,
                  betas=(0.9, 0.999), beta3=None,
                  eps=1e-8, weight_decay=0, decouple=True, 
-                 use_bias_correction=False, safeguard_warmup=False,
+                 use_bias_correction=False, use_belief=False, safeguard_warmup=False,
                  d0=1e-6, d_coef=1.0, growth_rate=float('inf'),
                  fsdp_in_use=False):
         if not 0.0 < d0:
@@ -81,6 +83,7 @@ class Prodigy(torch.optim.Optimizer):
                         d_numerator=0.0, d_coef=d_coef,
                         k=0, growth_rate=growth_rate,
                         use_bias_correction=use_bias_correction,
+                        use_belief=use_belief,
                         decouple=decouple, safeguard_warmup=safeguard_warmup,
                         fsdp_in_use=fsdp_in_use)
         self.d0 = d0
@@ -109,6 +112,7 @@ class Prodigy(torch.optim.Optimizer):
 
         group = self.param_groups[0]
         use_bias_correction = group['use_bias_correction']
+        use_belief = group['use_belief']
         beta1, beta2 = group['betas']
         beta3 = group['beta3']
         if beta3 is None:
@@ -180,8 +184,10 @@ class Prodigy(torch.optim.Optimizer):
 
                     # Adam EMA updates
                     exp_avg.mul_(beta1).add_(grad, alpha=d * (1-beta1))
-                    exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
-
+                    if not use_belief:
+                        exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=d * d * (1-beta2))
+                    else:
+                        exp_avg_sq.mul_(beta2).addcmul_(grad-exp_avg, grad-exp_avg, value=d * d * (1-beta2))
                     if safeguard_warmup:
                         s.mul_(beta3).add_(grad, alpha=((d / d0) * d))
                     else:
